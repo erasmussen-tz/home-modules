@@ -1,0 +1,3 @@
+# Not a real secret. `checks.homeConfiguration` needs a path that exists so the
+# sops branch of modules/javascript evaluates; nothing ever decrypts this.
+npm_private_read: ENC[AES256_GCM,data:cGxhY2Vob2xkZXI=,type:str]

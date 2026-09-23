@@ -9,6 +9,10 @@ let
 
   inherit (cfg.registry) tokenVariable;
 
+  # The one sops secret this module declares. Fixed rather than exposed as an
+  # option: nothing outside this file refers to it.
+  secret = "npm-private-read";
+
   # npm keys auth by the registry URL with the scheme stripped and a trailing
   # slash, so `https://registry.npmjs.org` becomes `//registry.npmjs.org/`.
   authKey = "${
@@ -46,67 +50,79 @@ let
   ''
   + lib.optionalString (cfg.registry.preapprovedPackages != [ ]) (
     # Quoted strings rather than an indented block: Nix strips a single-line
-    # `''` literal's whole leading margin, so the entries would come out flush
-    # against column zero.
+    # `''` literal's whole leading margin, so the entries would come out
+    # flush against column zero.
     "npmPreapprovedPackages:\n"
     + lib.concatMapStrings (name: "  - \"${name}\"\n") cfg.registry.preapprovedPackages
   );
 in
 {
   options.tz.javascript = {
-    enable = lib.mkEnableOption "TractorZoom JavaScript toolchain";
-
-    packages = lib.mkOption {
-      type = with lib.types; listOf package;
-      default = with pkgs; [
-        biome
-        commitlint
-        fnm
-        lefthook
-        yarn-berry
-      ];
-      defaultText = lib.literalExpression ''
-        with pkgs; [ biome commitlint fnm lefthook yarn-berry ]
-      '';
+    enable = lib.mkOption {
+      type = lib.types.bool;
+      default = config.tz.enable;
+      defaultText = lib.literalExpression "config.tz.enable";
       description = ''
-        Tooling every TractorZoom JavaScript checkout expects on PATH. Node
-        itself is absent on purpose: each repo pins a version in `.nvmrc` and
-        `fnm` supplies it, so a global `nodejs` would only shadow the pin.
-        `fnm`'s shell hook is left to whichever module owns the shell.
+        Set up the TractorZoom JavaScript toolchain: biome, commitlint, fnm,
+        lefthook and yarn on PATH, and `~/.npmrc` and `~/.yarnrc.yml` written
+        so the private `@tractorzoom` packages install.
+      '';
+    };
+
+    extraPackages = lib.mkOption {
+      type = with lib.types; listOf package;
+      default = [ ];
+      example = lib.literalExpression "with pkgs; [ nodePackages.typescript-language-server ]";
+      description = ''
+        Extra tools to put on PATH alongside the toolchain above. Added to the
+        defaults rather than replacing them, so listing one tool here cannot
+        cost you the linter. Dropping a default is a change to this repo.
+
+        Node itself is deliberately not installed: every repo pins a version
+        in its `.nvmrc` and `fnm` supplies that, so a system-wide `nodejs`
+        would only shadow the pin.
       '';
     };
 
     registry = {
-      url = lib.mkOption {
-        type = lib.types.str;
-        default = "https://registry.npmjs.org";
+      tokenSopsFile = lib.mkOption {
+        type = with lib.types; nullOr path;
+        default = null;
+        example = lib.literalExpression "./secrets/npm.yaml";
         description = ''
-          Registry serving the private `@tractorzoom` scope. No trailing
-          slash; the npm auth key and the `registry=` line derive theirs.
+          A sops-encrypted YAML file holding the npm read token. This module
+          declares the sops secret and points both rc files at it, so nothing
+          else needs wiring up. Edit the file with `sops <path>`; the key
+          inside it is `tokenSopsKey`.
+
+          The token is read at shell startup from the decrypted copy, so it
+          never lands in the world-readable nix store. Leaving this null
+          leaves the token to be exported some other way.
         '';
+      };
+
+      tokenSopsKey = lib.mkOption {
+        type = lib.types.str;
+        default = "npm_private_read";
+        description = "Key inside `tokenSopsFile` holding the token.";
       };
 
       tokenVariable = lib.mkOption {
         type = lib.types.str;
         default = "NPM_PRIVATE_READ";
         description = ''
-          Environment variable both rc files reference for the read token.
-          Named rather than inlined so the token never reaches the world
-          readable nix store, and matching the variable the checked-in
-          per-repo `.npmrc` and `.yarnrc.yml` files already interpolate.
+          Environment variable both rc files read the token from. Matches the
+          variable the checked-in per-repo `.npmrc` and `.yarnrc.yml` files
+          already interpolate, so those keep working unchanged.
         '';
       };
 
-      tokenFile = lib.mkOption {
-        type = with lib.types; nullOr path;
-        default = null;
-        example = lib.literalExpression ''config.sops.secrets."npm-private-read".path'';
+      url = lib.mkOption {
+        type = lib.types.str;
+        default = "https://registry.npmjs.org";
         description = ''
-          Runtime path of a file holding the token. Read at shell startup to
-          export `tokenVariable`, which is what makes the per-repo rc files
-          resolve. A path rather than a sops secret name because the value is
-          only ever needed at runtime, which keeps this module usable without
-          sops-nix. Null leaves the export to the caller.
+          Registry serving the private `@tractorzoom` scope. No trailing
+          slash; the npm auth key and the `registry=` line derive theirs.
         '';
       };
 
@@ -134,18 +150,45 @@ in
     };
   };
 
-  config = lib.mkIf cfg.enable {
-    home.packages = cfg.packages;
+  config = lib.mkIf cfg.enable (
+    lib.mkMerge [
+      {
+        home.packages =
+          (with pkgs; [
+            biome
+            commitlint
+            fnm
+            lefthook
+            yarn-berry
+          ])
+          ++ cfg.extraPackages;
 
-    home.file.".npmrc".text = npmrc;
-    home.file.".yarnrc.yml".text = yarnrc;
+        home.file.".npmrc".text = npmrc;
+        home.file.".yarnrc.yml".text = yarnrc;
 
-    # Guarded rather than a `home.sessionVariables` entry: an unreadable or
-    # not yet decrypted secret would otherwise print an error on every shell.
-    home.sessionVariablesExtra = lib.mkIf (cfg.registry.tokenFile != null) ''
-      if [ -r "${cfg.registry.tokenFile}" ]; then
-        export ${tokenVariable}="$(cat "${cfg.registry.tokenFile}")"
-      fi
-    '';
-  };
+        warnings = lib.optional (cfg.registry.tokenSopsFile == null) ''
+          tz.javascript.registry.tokenSopsFile is not set, so ${tokenVariable}
+          is never exported and installing a private @tractorzoom package will
+          fail to authenticate. Point it at a sops-encrypted file holding the
+          token, or export ${tokenVariable} yourself.
+        '';
+      }
+
+      (lib.mkIf (cfg.registry.tokenSopsFile != null) {
+        sops.secrets.${secret} = {
+          sopsFile = cfg.registry.tokenSopsFile;
+          key = cfg.registry.tokenSopsKey;
+        };
+
+        # Guarded rather than a `home.sessionVariables` entry: before the first
+        # activation decrypts the secret the path does not exist, and an
+        # unguarded `cat` would print an error on every new shell.
+        home.sessionVariablesExtra = ''
+          if [ -r "${config.sops.secrets.${secret}.path}" ]; then
+            export ${tokenVariable}="$(cat "${config.sops.secrets.${secret}.path}")"
+          fi
+        '';
+      })
+    ]
+  );
 }
