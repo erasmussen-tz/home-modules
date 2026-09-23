@@ -2,3 +2,5 @@
 *.local
 .direnv/
 bin/
+.claude/*
+!.claude/skills/
