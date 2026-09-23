@@ -1,9 +1,9 @@
 {
-  description = "A Nix flake";
+  description = "Shared home-manager modules for TZ development environments";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
-    systems.url = "github:UnstoppableMango/nix-systems";
+    systems.url = "github:nix-systems/triplet";
 
     flake-parts = {
       url = "github:hercules-ci/flake-parts";
@@ -22,7 +22,6 @@
       systems = import inputs.systems;
 
       imports = with inputs; [
-        systems.flakeModule
         treefmt-nix.flakeModule
       ];
 
