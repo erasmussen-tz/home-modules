@@ -25,6 +25,11 @@
         treefmt-nix.flakeModule
       ];
 
+      flake.homeModules = {
+        tz = ./modules;
+        default = ./modules;
+      };
+
       perSystem =
         { pkgs, ... }:
         {
