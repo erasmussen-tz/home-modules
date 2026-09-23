@@ -111,20 +111,16 @@ tz.salesforce.enable = false;
 Add a tool for yourself, on top of what the module installs:
 
 ```nix
-tz.javascript.extraPackages = with pkgs; [ ripgrep ];
-```
-
-That needs `pkgs` in scope, so write the module as a function:
-
-```nix
 { pkgs, ... }:
 {
-  tz.javascript.extraPackages = with pkgs; [ ripgrep ];
+  tz.javascript.extraPackages = [ pkgs.ripgrep ];
 }
 ```
 
+`pkgs` is the package set, and it arrives through the `{ pkgs, ... }:` line, so a block that names a package needs that line at the top.
+
 Search [search.nixos.org/packages](https://search.nixos.org/packages) for a tool's name.
-A name that does not exist fails the build with `attribute 'foo' missing` rather than installing nothing.
+A name that does not exist fails the build with `attribute 'ripgrepp' missing` rather than installing nothing.
 
 ## Modules
 
@@ -166,9 +162,100 @@ An empty result means either the switch has not run since you set `tokenSopsFile
 `npmMinimalAgeGate` holds new releases back for eight days as a supply chain delay.
 A repo that needs a newer internal release lists it in its own `npmPreapprovedPackages`.
 
-## Working on this repo
+## Working on the modules
 
 ```sh
 make fmt    # format
-make check  # evaluate everything
+make check  # build a configuration with every module turned on
 ```
+
+`make check` is the one that matters.
+It builds a real Home Manager configuration with `tz.enable = true`, so a module that fails to evaluate fails here rather than on someone's laptop.
+CI runs the same command.
+
+### The shape of a module
+
+Every file under `modules/` looks like this:
+
+```nix
+{ config, lib, pkgs, ... }:
+let
+  cfg = config.tz.javascript;
+in
+{
+  options.tz.javascript = {
+    # what can be set
+  };
+
+  config = lib.mkIf cfg.enable {
+    # what happens when it is
+  };
+}
+```
+
+The first line takes what the module needs: `config` is every setting in the final configuration, `lib` is the standard library, `pkgs` is the package set.
+`let ... in` names things for use below, the way a block of `const` declarations would.
+`cfg` is always shorthand for this module's own settings.
+
+### The whole vocabulary
+
+This table is every library function and operator used anywhere under `modules/`.
+There is no `with`, no `inherit`, no `builtins.` and no `rec` in this repo, and keeping it that way is deliberate.
+To check after a change:
+
+```sh
+grep -rohE '\blib\.[a-zA-Z.]+|\bbuiltins\.[a-zA-Z]+|\binherit\b|\bwith [a-zA-Z.]+;|\brec \{|\+\+' modules/ | sort -u
+```
+
+| Spelling | Means |
+| --- | --- |
+| `lib.mkOption { type = ...; default = ...; }` | Declare a setting. `type` is checked, so a typo fails the build with the option's name in the message. |
+| `lib.mkEnableOption "..."` | Shorthand for an on/off setting that starts off. |
+| `lib.mkIf condition { ... }` | Apply this block only when the condition holds. Wraps the whole `config` half of a module. |
+| `lib.mkDefault value` | A value any consumer can override without a fight. Use it for anything you are guessing at on their behalf. |
+| `lib.optionalAttrs condition { ... }` | The block, or `{ }` when the condition is false. |
+| `lib.optionalString condition "..."` | The string, or `""`. |
+| `lib.optional condition value` | A one-item list, or `[ ]`. Note the missing `s`; `lib.optionals` takes a list instead. |
+| `lib.types.str`, `.bool`, `.int`, `.path`, `.package` | Setting types. `lib.types.listOf X` is a list of them, `lib.types.nullOr X` allows null. |
+| `lib.literalExpression "..."` | Shows that text as the default or example in the generated docs, instead of the evaluated value. Documentation only. |
+| `lib.hasPrefix`, `lib.removePrefix` | Ordinary string helpers, same as any language's. |
+| `a ++ b` | Join two lists. |
+| `a // b` | Merge two sets, `b` winning. Shallow, so `{ x.y = 1; } // { x.z = 2; }` loses `x.y`. |
+| `''...''` | A multi-line string. `${foo}` inside it inserts the value of `foo`. |
+
+Two of those bite:
+
+**`//` is shallow.**
+Merging `{ tz.enable = true; }` with `{ tz.javascript.url = "..."; }` gives you only the second.
+Use a list of modules and let the module system merge them, which is deep.
+
+**`${` always belongs to Nix.**
+To put a literal `${VAR}` into a generated file, build it by joining pieces, as `envReference` in `modules/javascript/default.nix` does.
+
+### Generating config files
+
+Prefer a generator over writing the file out by hand:
+
+```nix
+yaml = pkgs.formats.yaml { };
+# ...
+home.file.".yarnrc.yml".source = yaml.generate "yarnrc.yml" {
+  npmAlwaysAuth = true;
+  npmMinimalAgeGate = 11520;
+};
+```
+
+You write a plain object and get correct quoting and escaping for free.
+`pkgs.formats` also has `json`, `toml` and `ini`.
+Hand-written text is worth it only for a format none of those covers, like `.npmrc`.
+
+### Adding a module
+
+1. Create `modules/yourthing/default.nix` using the shape above.
+2. Add `./yourthing` to the `imports` list in `modules/default.nix`.
+3. Give it `enable = lib.mkOption { type = lib.types.bool; default = config.tz.enable; ... }`, so `tz.enable` picks it up.
+4. Add a row to the module table above.
+5. Run `make check`.
+
+Step 3 is the only one easy to get wrong.
+Using `lib.mkEnableOption` there instead would leave the module off under `tz.enable = true`.

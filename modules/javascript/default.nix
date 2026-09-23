@@ -1,3 +1,8 @@
+# The JavaScript toolchain every TractorZoom web and service repo expects.
+#
+# Every module in this repo has the same two halves: `options` declares what
+# can be set, `config` is what happens when it is. README.md's "Working on the
+# modules" section explains the handful of Nix spellings used below.
 {
   config,
   lib,
@@ -7,54 +12,49 @@
 let
   cfg = config.tz.javascript;
 
-  inherit (cfg.registry) tokenVariable;
+  yaml = pkgs.formats.yaml { };
 
-  # The one sops secret this module declares. Fixed rather than exposed as an
-  # option: nothing outside this file refers to it.
-  secret = "npm-private-read";
+  # The literal text `${NPM_PRIVATE_READ}`, for npm and Yarn to expand when
+  # they run. Built by joining three pieces because writing the `${` directly
+  # would make Nix expand it instead, while the file is still being generated.
+  envReference = name: "$" + "{" + name + "}";
 
-  # npm keys auth by the registry URL with the scheme stripped and a trailing
-  # slash, so `https://registry.npmjs.org` becomes `//registry.npmjs.org/`.
-  authKey = "${
-    lib.removeSuffix "/" (
-      builtins.replaceStrings
-        [
-          "https:"
-          "http:"
-        ]
-        [
-          ""
-          ""
-        ]
-        cfg.registry.url
-    )
-  }/";
+  token = envReference cfg.registry.tokenVariable;
+
+  # npm identifies a registry's credentials by its URL with the scheme cut
+  # off, so `https://registry.npmjs.org` is keyed as `//registry.npmjs.org/`.
+  registryWithoutScheme = lib.removePrefix "https:" cfg.registry.url;
 
   npmrc = ''
     registry=${cfg.registry.url}/
-    ${authKey}:_authToken=''${${tokenVariable}}
+    ${registryWithoutScheme}/:_authToken=${token}
     save-exact=true
   '';
 
-  # Yarn reads ~/.yarnrc.yml first and lets a project's file override any key,
-  # so this is a floor rather than a mandate. Rendered by hand rather than
-  # through pkgs.formats.yaml because the token reference has to survive
-  # unquoted: Yarn only interpolates ${VAR} outside quotes.
-  yarnrc = ''
-    npmRegistryServer: "${cfg.registry.url}"
-    npmAlwaysAuth: true
-    npmAuthToken: ''${${tokenVariable}}
-  ''
-  + lib.optionalString (cfg.registry.minimalAgeGate != null) ''
-    npmMinimalAgeGate: ${toString cfg.registry.minimalAgeGate}
-  ''
-  + lib.optionalString (cfg.registry.preapprovedPackages != [ ]) (
-    # Quoted strings rather than an indented block: Nix strips a single-line
-    # `''` literal's whole leading margin, so the entries would come out
-    # flush against column zero.
-    "npmPreapprovedPackages:\n"
-    + lib.concatMapStrings (name: "  - \"${name}\"\n") cfg.registry.preapprovedPackages
-  );
+  # Yarn reads ~/.yarnrc.yml before a project's own file and lets the project
+  # override any key, so these are starting points rather than rules.
+  yarnrc = {
+    npmRegistryServer = cfg.registry.url;
+    npmAlwaysAuth = true;
+    npmAuthToken = token;
+  }
+  # `//` merges two sets together, and `optionalAttrs` returns an empty set
+  # when its condition is false, so each block below adds its key only when
+  # there is something to say.
+  // lib.optionalAttrs (cfg.registry.minimalAgeGate != null) {
+    npmMinimalAgeGate = cfg.registry.minimalAgeGate;
+  }
+  // lib.optionalAttrs (cfg.registry.preapprovedPackages != [ ]) {
+    npmPreapprovedPackages = cfg.registry.preapprovedPackages;
+  };
+
+  # Set when the token comes from sops, which is what makes this module
+  # declare the secret and export the variable.
+  fromSops = cfg.registry.tokenSopsFile != null;
+
+  # Where sops writes the decrypted token. Only ever read when `fromSops`, so
+  # naming it here is safe even though the secret may not be declared.
+  tokenPath = config.sops.secrets."npm-private-read".path;
 in
 {
   options.tz.javascript = {
@@ -70,9 +70,9 @@ in
     };
 
     extraPackages = lib.mkOption {
-      type = with lib.types; listOf package;
+      type = lib.types.listOf lib.types.package;
       default = [ ];
-      example = lib.literalExpression "with pkgs; [ nodePackages.typescript-language-server ]";
+      example = lib.literalExpression "[ pkgs.nodePackages.typescript-language-server ]";
       description = ''
         Extra tools to put on PATH alongside the toolchain above. Added to the
         defaults rather than replacing them, so listing one tool here cannot
@@ -86,7 +86,7 @@ in
 
     registry = {
       tokenSopsFile = lib.mkOption {
-        type = with lib.types; nullOr path;
+        type = lib.types.nullOr lib.types.path;
         default = null;
         example = lib.literalExpression "./secrets/npm.yaml";
         description = ''
@@ -121,13 +121,14 @@ in
         type = lib.types.str;
         default = "https://registry.npmjs.org";
         description = ''
-          Registry serving the private `@tractorzoom` scope. No trailing
-          slash; the npm auth key and the `registry=` line derive theirs.
+          Registry serving the private `@tractorzoom` scope. Must start with
+          `https://` and carry no trailing slash; the npm auth key and the
+          `registry=` line derive theirs.
         '';
       };
 
       minimalAgeGate = lib.mkOption {
-        type = with lib.types; nullOr int;
+        type = lib.types.nullOr lib.types.int;
         default = 11520;
         description = ''
           Minutes a version must have been published before Yarn will install
@@ -139,7 +140,7 @@ in
       };
 
       preapprovedPackages = lib.mkOption {
-        type = with lib.types; listOf str;
+        type = lib.types.listOf lib.types.str;
         default = [ ];
         example = [ "@tractorzoom/types" ];
         description = ''
@@ -150,45 +151,55 @@ in
     };
   };
 
-  config = lib.mkIf cfg.enable (
-    lib.mkMerge [
+  # Everything below applies only when the module is turned on. That is what
+  # `lib.mkIf` does, and it is why an unused module costs nothing.
+  config = lib.mkIf cfg.enable {
+    assertions = [
       {
-        home.packages =
-          (with pkgs; [
-            biome
-            commitlint
-            fnm
-            lefthook
-            yarn-berry
-          ])
-          ++ cfg.extraPackages;
-
-        home.file.".npmrc".text = npmrc;
-        home.file.".yarnrc.yml".text = yarnrc;
-
-        warnings = lib.optional (cfg.registry.tokenSopsFile == null) ''
-          tz.javascript.registry.tokenSopsFile is not set, so ${tokenVariable}
-          is never exported and installing a private @tractorzoom package will
-          fail to authenticate. Point it at a sops-encrypted file holding the
-          token, or export ${tokenVariable} yourself.
+        assertion = lib.hasPrefix "https://" cfg.registry.url;
+        message = ''
+          tz.javascript.registry.url is "${cfg.registry.url}", which does not
+          start with https://. The npm auth key is derived by cutting the
+          scheme off that URL, and an npm token is a bearer credential that
+          must not travel in the clear.
         '';
       }
+    ];
 
-      (lib.mkIf (cfg.registry.tokenSopsFile != null) {
-        sops.secrets.${secret} = {
-          sopsFile = cfg.registry.tokenSopsFile;
-          key = cfg.registry.tokenSopsKey;
-        };
+    warnings = lib.optional (!fromSops) ''
+      tz.javascript.registry.tokenSopsFile is not set, so
+      ${cfg.registry.tokenVariable} is never exported and installing a private
+      @tractorzoom package will fail to authenticate. Point it at a
+      sops-encrypted file holding the token, or export
+      ${cfg.registry.tokenVariable} yourself.
+    '';
 
-        # Guarded rather than a `home.sessionVariables` entry: before the first
-        # activation decrypts the secret the path does not exist, and an
-        # unguarded `cat` would print an error on every new shell.
-        home.sessionVariablesExtra = ''
-          if [ -r "${config.sops.secrets.${secret}.path}" ]; then
-            export ${tokenVariable}="$(cat "${config.sops.secrets.${secret}.path}")"
-          fi
-        '';
-      })
+    home.packages = [
+      pkgs.biome
+      pkgs.commitlint
+      pkgs.fnm
+      pkgs.lefthook
+      pkgs.yarn-berry
     ]
-  );
+    ++ cfg.extraPackages;
+
+    home.file.".npmrc".text = npmrc;
+    home.file.".yarnrc.yml".source = yaml.generate "yarnrc.yml" yarnrc;
+
+    sops.secrets = lib.optionalAttrs fromSops {
+      "npm-private-read" = {
+        sopsFile = cfg.registry.tokenSopsFile;
+        key = cfg.registry.tokenSopsKey;
+      };
+    };
+
+    # Guarded rather than a plain `home.sessionVariables` entry: before the
+    # first activation decrypts the secret the path does not exist, and an
+    # unguarded `cat` would print an error on every new shell.
+    home.sessionVariablesExtra = lib.optionalString fromSops ''
+      if [ -r "${tokenPath}" ]; then
+        export ${cfg.registry.tokenVariable}="$(cat "${tokenPath}")"
+      fi
+    '';
+  };
 }

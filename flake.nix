@@ -48,19 +48,16 @@
       # `inputs.home-modules.inputs.sops-nix.follows = "sops-nix"`, or the
       # module system sees two copies declaring `options.sops` and rejects the
       # duplicate. README.md spells this out.
-      flake.homeModules =
-        let
-          tz = {
-            imports = [
-              inputs.sops-nix.homeModules.sops
-              ./modules
-            ];
-          };
-        in
-        {
-          inherit tz;
-          default = tz;
-        };
+      flake.homeModules.tz = {
+        imports = [
+          inputs.sops-nix.homeModules.sops
+          ./modules
+        ];
+      };
+
+      # `homeModules.default` is what `nix flake show` and a bare import pick
+      # up, so it is the same thing under the name those expect.
+      flake.homeModules.default = inputs.self.homeModules.tz;
 
       perSystem =
         { pkgs, ... }:
