@@ -5,7 +5,6 @@
     ./javascript
     ./nix
     ./salesforce
-    ./secrets
   ];
 
   options.tz.enable = lib.mkEnableOption ''
