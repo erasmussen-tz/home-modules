@@ -9,7 +9,7 @@
     enable = lib.mkEnableOption "Setup the TractorZoom JavaScript toolchain";
   };
 
-  config = lib.mkIf config.tz.javascript {
+  config = lib.mkIf config.tz.javascript.enable {
     home.packages = with pkgs; [
       biome
       commitlint
