@@ -1,5 +1,5 @@
 build:
-	nix build .#
+	home-manager build --flake ./tests#everything
 
 update:
 	nix flake update

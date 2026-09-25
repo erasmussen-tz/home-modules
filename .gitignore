@@ -1,4 +1,5 @@
 /result*
+/tests/result*
 *.local
 .direnv/
 bin/

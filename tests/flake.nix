@@ -26,11 +26,15 @@
       systems = import inputs.systems;
 
       flake.homeConfigurations = {
-        test = inputs.home-manager.lib.homeManagerConfiguration {
+        everything = inputs.home-manager.lib.homeManagerConfiguration {
           pkgs = inputs.nixpkgs.legacyPackages.aarch64-darwin;
 
           modules = [
             {
+              imports = with inputs; [
+                tz.homeModules.default
+              ];
+
               home.homeDirectory = "/tmp";
               home.username = "test";
               home.stateVersion = "26.05";

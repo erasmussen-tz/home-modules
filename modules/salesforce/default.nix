@@ -2,6 +2,7 @@
   pkgs,
   lib,
   config,
+  ...
 }:
 {
   options.tz.salesforce = {
@@ -9,7 +10,7 @@
   };
 
   config = lib.mkIf config.tz.salesforce.enable {
-    sessionVariables = {
+    home.sessionVariables = {
       SF_DISABLE_TELEMETRY = "true";
     };
 
