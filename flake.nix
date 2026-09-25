@@ -17,7 +17,7 @@
   };
 
   outputs =
-    inputs@{ flake-parts, ... }:
+    inputs@{ flake-parts, self, ... }:
     flake-parts.lib.mkFlake { inherit inputs; } {
       systems = import inputs.systems;
 
@@ -25,9 +25,10 @@
         treefmt-nix.flakeModule
       ];
 
-      flake.homeModules.tz = ./modules;
-
-      flake.homeModules.default = inputs.self.homeModules.tz;
+      flake.homeModules = {
+        tz = ./modules;
+        default = self.homeModules.tz;
+      };
 
       perSystem =
         { pkgs, ... }:
@@ -35,12 +36,17 @@
           devShells.default = pkgs.mkShellNoCC {
             packages = with pkgs; [
               gnumake
+              home-manager
               nixfmt
             ];
           };
 
           treefmt.programs = {
+            actionlint.enable = true;
+            deadnix.enable = true;
             nixfmt.enable = true;
+            statix.enable = true;
+            zizmor.enable = true;
           };
         };
     };
