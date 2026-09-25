@@ -18,7 +18,6 @@
     mangopkgs = {
       url = "github:unmango/pkgs";
       inputs.nixpkgs.follows = "nixpkgs";
-      inputs.systems.follows = "systems";
       inputs.flake-parts.follows = "flake-parts";
       inputs.treefmt-nix.follows = "treefmt-nix";
     };
@@ -34,7 +33,13 @@
       ];
 
       flake.homeModules = {
-        tz = ./modules;
+        tz = {
+          imports = [ ./modules ];
+          nixpkgs.overlays = with inputs; [
+            mangopkgs.overlays.default
+          ];
+        };
+
         default = self.homeModules.tz;
       };
 

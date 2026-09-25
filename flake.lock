@@ -74,9 +74,7 @@
         "nixpkgs": [
           "nixpkgs"
         ],
-        "systems": [
-          "systems"
-        ],
+        "systems": "systems",
         "treefmt-nix": [
           "treefmt-nix"
         ]
@@ -137,11 +135,26 @@
         "flake-parts": "flake-parts",
         "mangopkgs": "mangopkgs",
         "nixpkgs": "nixpkgs",
-        "systems": "systems",
+        "systems": "systems_2",
         "treefmt-nix": "treefmt-nix"
       }
     },
     "systems": {
+      "locked": {
+        "lastModified": 1789010989,
+        "narHash": "sha256-irfHSRNJFce/bqbVtioyeZHhYeCPNitpdTL2ljyHVSk=",
+        "owner": "UnstoppableMango",
+        "repo": "nix-systems",
+        "rev": "65a92fc9e5f34414623b90dd0f795d9c2ddf4c40",
+        "type": "github"
+      },
+      "original": {
+        "owner": "UnstoppableMango",
+        "repo": "nix-systems",
+        "type": "github"
+      }
+    },
+    "systems_2": {
       "locked": {
         "lastModified": 1776166891,
         "narHash": "sha256-bI8yrEGjrohR5hkQox7UrxDH7XqrYMwI8SL/LrJ1+S8=",
